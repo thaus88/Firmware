@@ -730,17 +730,9 @@ bool handle_command(struct vehicle_status_s *status_local, const struct safety_s
 			hil_state_t new_hil_state = (base_mode & VEHICLE_MODE_FLAG_HIL_ENABLED) ? vehicle_status_s::HIL_STATE_ON : vehicle_status_s::HIL_STATE_OFF;
 			transition_result_t hil_ret = hil_state_transition(new_hil_state, status_pub, status_local, &mavlink_log_pub);
 
-			// Transition the arming state
-			bool cmd_arm = base_mode & VEHICLE_MODE_FLAG_SAFETY_ARMED;
-
-			arming_ret = arm_disarm(cmd_arm, &mavlink_log_pub, "set mode command");
-
-			/* update home position on arming if at least 500 ms from commander start spent to avoid setting home on in-air restart */
-			if (cmd_arm && (arming_ret == TRANSITION_CHANGED) &&
-				(hrt_absolute_time() > (commander_boot_timestamp + INAIR_RESTART_HOLDOFF_INTERVAL))) {
-
-				commander_set_home_position(*home_pub, *home, *local_pos, *global_pos, *attitude);
-			}
+			// We ignore base_mode & VEHICLE_MODE_FLAG_SAFETY_ARMED because
+			// the command VEHICLE_CMD_COMPONENT_ARM_DISARM should be used
+			// instead according to the latest mavlink spec.
 
 			if (base_mode & VEHICLE_MODE_FLAG_CUSTOM_MODE_ENABLED) {
 				/* use autopilot-specific mode */
@@ -1913,7 +1905,7 @@ int commander_thread_main(int argc, char *argv[])
 					} else {
 						/* check sensors also */
 						(void)Commander::preflightCheck(&mavlink_log_pub, true, true, true, true, checkAirspeed,
-								(status.rc_input_mode == vehicle_status_s::RC_IN_MODE_DEFAULT), !status_flags.circuit_breaker_engaged_gpsfailure_check,
+								(status.rc_input_mode == vehicle_status_s::RC_IN_MODE_DEFAULT), !can_arm_without_gps,
 								 /* checkDynamic */ true, is_vtol(&status), /* reportFailures */ hotplug_timeout, /* prearm */ false, hrt_elapsed_time(&commander_boot_timestamp));
 					}
 				}
@@ -4012,7 +4004,7 @@ void *commander_low_prio_loop(void *arg)
 						}
 
 						status_flags.condition_system_sensors_initialized = Commander::preflightCheck(&mavlink_log_pub, true, true, true, true, checkAirspeed,
-							!(status.rc_input_mode >= vehicle_status_s::RC_IN_MODE_OFF), !status_flags.circuit_breaker_engaged_gpsfailure_check,
+							!(status.rc_input_mode >= vehicle_status_s::RC_IN_MODE_OFF), !can_arm_without_gps,
 							/* checkDynamic */ true, is_vtol(&status), /* reportFailures */ hotplug_timeout, /* prearm */ false, hrt_elapsed_time(&commander_boot_timestamp));
 
 						arming_state_transition(&status,

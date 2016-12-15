@@ -150,7 +150,13 @@ MixerGroup::set_thrust_factor(float val)
 		mixer->set_thrust_factor(val);
 		mixer = mixer->_next;
 	}
+}
 
+uint16_t
+MixerGroup::get_saturation_status()
+{
+	Mixer	*mixer = _first;
+	return mixer->get_saturation_status();
 }
 
 unsigned

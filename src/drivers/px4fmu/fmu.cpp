@@ -87,7 +87,7 @@
 #include <uORB/topics/parameter_update.h>
 #include <uORB/topics/safety.h>
 #include <uORB/topics/adc_report.h>
-
+#include <uORB/topics/multirotor_motor_limits.h>
 
 #ifdef HRT_PPM_CHANNEL
 # include <systemlib/ppm_decode.h>
@@ -230,6 +230,7 @@ private:
 	bool		_safety_off;
 	bool		_safety_disabled;
 	orb_advert_t		_to_safety;
+	orb_advert_t      _to_mixer_status; 	///< mixer status flags
 
 	float _mot_t_max;	// maximum rise time for motor (slew rate limiting)
 	float _thr_mdl_fac;	// thrust to pwm modelling factor
@@ -344,10 +345,10 @@ PX4FMU::PX4FMU() :
 	_safety_off(false),
 	_safety_disabled(false),
 	_to_safety(nullptr),
+	_to_mixer_status(nullptr),
 	_mot_t_max(0.0f),
 	_thr_mdl_fac(0.0f),
 	_ctl_latency(perf_alloc(PC_ELAPSED, "ctl_lat"))
-
 {
 	for (unsigned i = 0; i < _max_actuators; i++) {
 		_min_pwm[i] = PWM_DEFAULT_MIN;
@@ -772,10 +773,7 @@ PX4FMU::update_pwm_trims()
 {
 	PX4_DEBUG("update_pwm_trims");
 
-	if (_mixers == nullptr) {
-		PX4_WARN("no mixers defined");
-
-	} else {
+	if (_mixers != nullptr) {
 
 		int16_t values[_max_actuators] = {};
 
@@ -812,7 +810,7 @@ PX4FMU::publish_pwm_outputs(uint16_t *values, size_t numvalues)
 	}
 
 	if (_outputs_pub == nullptr) {
-		int instance = -1;
+		int instance = _class_instance;
 		_outputs_pub = orb_advertise_multi(ORB_ID(actuator_outputs), &outputs, &instance, ORB_PRIO_DEFAULT);
 
 	} else {
@@ -971,7 +969,6 @@ PX4FMU::cycle()
 		pwm_limit_init(&_pwm_limit);
 
 		update_pwm_rev_mask();
-		update_pwm_trims();
 
 #ifdef RC_SERIAL_PORT
 
@@ -1172,6 +1169,21 @@ PX4FMU::cycle()
 			float outputs[_max_actuators];
 			num_outputs = _mixers->mix(outputs, num_outputs, NULL);
 
+			/* publish mixer status */
+			multirotor_motor_limits_s multirotor_motor_limits = {};
+			multirotor_motor_limits.saturation_status = _mixers->get_saturation_status();
+
+			if (_to_mixer_status == nullptr) {
+				/* publish limits */
+				int instance = _class_instance;
+				_to_mixer_status = orb_advertise_multi(ORB_ID(multirotor_motor_limits), &multirotor_motor_limits, &instance,
+								       ORB_PRIO_DEFAULT);
+
+			} else {
+				orb_publish(ORB_ID(multirotor_motor_limits), _to_mixer_status, &multirotor_motor_limits);
+
+			}
+
 			/* disable unused ports by setting their output to NaN */
 			for (size_t i = 0; i < sizeof(outputs) / sizeof(outputs[0]); i++) {
 				if (i >= num_outputs) {
@@ -1243,7 +1255,8 @@ PX4FMU::cycle()
 			orb_publish(ORB_ID(safety), _to_safety, &safety);
 
 		} else {
-			_to_safety = orb_advertise(ORB_ID(safety), &safety);
+			int instance = _class_instance;
+			_to_safety = orb_advertise_multi(ORB_ID(safety), &safety, &instance, ORB_PRIO_DEFAULT);
 		}
 	}
 
@@ -1578,7 +1591,8 @@ PX4FMU::cycle()
 	if (rc_updated) {
 		/* lazily advertise on first publication */
 		if (_to_input_rc == nullptr) {
-			_to_input_rc = orb_advertise(ORB_ID(input_rc), &_rc_in);
+			int instance = _class_instance;
+			_to_input_rc = orb_advertise_multi(ORB_ID(input_rc), &_rc_in, &instance, ORB_PRIO_DEFAULT);
 
 		} else {
 			orb_publish(ORB_ID(input_rc), _to_input_rc, &_rc_in);
@@ -2342,6 +2356,7 @@ PX4FMU::pwm_ioctl(file *filp, int cmd, unsigned long arg)
 
 					_mixers->groups_required(_groups_required);
 					PX4_DEBUG("loaded mixers \n%s\n", buf);
+					update_pwm_trims();
 				}
 			}
 
@@ -3179,6 +3194,8 @@ fake(int argc, char *argv[])
 		errx(1, "advertise failed");
 	}
 
+	orb_unadvertise(handle);
+
 	actuator_armed_s aa;
 
 	aa.armed = true;
@@ -3189,6 +3206,8 @@ fake(int argc, char *argv[])
 	if (handle == nullptr) {
 		errx(1, "advertise failed 2");
 	}
+
+	orb_unadvertise(handle);
 
 	exit(0);
 }
